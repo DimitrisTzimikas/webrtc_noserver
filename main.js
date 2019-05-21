@@ -26,7 +26,6 @@ let answerOfferInput = null;
 let receiveBox = null;
 let dataChannel = null;
 let fileChannel = null;
-let localVideoStream = null;
 let localVideo = null;
 let remoteVideo = null;
 let fileDownload = null;
@@ -57,7 +56,7 @@ const peerConnectionConfig = {
 };
 
 //let peerConnectionConfig = {iceServers: [{urls: []}]};
-let peerConnection = new RTCPeerConnection(peerConnectionConfig);
+let pc = new RTCPeerConnection(peerConnectionConfig);
 
 /* ==============================
  Set things up, connect event listeners, etc.
@@ -106,70 +105,53 @@ function copyOffer() {
 }
 
 /* ======================================================
- Handle errors attempting to create a description;
- this can happen both when creating an offer and when
- creating an answer. In this simple example, we handle
- both the same way.
+ Create Offer/Answer for peers
  ======================================================= */
-function handleCreateDescriptionError(error) {
-  console.log("Unable to create an offer: " + error.toString());
-}
-
-function errorHandler(error) {
-  console.log(error);
-}
-
-function createOffer() {
-  dataChannel = peerConnection.createDataChannel("dataChannel");
-  fileChannel = peerConnection.createDataChannel("fileChannel");
+async function createOffer() {
+  dataChannel = pc.createDataChannel("dataChannel");
+  fileChannel = pc.createDataChannel("fileChannel");
   
   dataChannelHandlers();
   fileChannelHandlers();
   
-  peerConnection.createOffer()
-    .then(function (description) {
-      console.log('createOffer ok ');
-      console.log(description);
-      return peerConnection.setLocalDescription(description)
-        .then(function () {
-          setTimeout(function () {
-            console.log("peerConnection.iceGatheringState = " + peerConnection.iceGatheringState);
-            if (peerConnection.iceGatheringState === "complete") {
-              return;
-            } else {
-              console.log('after iceGathering Timeout');
-              offerInput.value = JSON.stringify(peerConnection.localDescription);
-            }
-          }, 2000);
-          console.log('setLocalDescription ok');
-        })
-        .catch(handleCreateDescriptionError);
-    }).catch(handleCreateDescriptionError);
+  try {
+    const description = await pc.createOffer();
+    await pc.setLocalDescription(description);
+    console.log('setLocalDescription ok');
+    
+    setTimeout(() => {
+      console.log("pc.iceGatheringState = " + pc.iceGatheringState);
+      if (pc.iceGatheringState === "complete") {
+        console.log('pc.iceGatheringState === "complete"');
+      } else {
+        console.log('after iceGathering Timeout');
+        offerInput.value = JSON.stringify(pc.localDescription);
+      }
+    }, 2000);
+  } catch (e) {console.log(e);}
 }
 
-function createAnswer() {
+async function createAnswer() {
   const remoteOffer = new RTCSessionDescription(JSON.parse(answerOfferInput.value));
   console.log('remoteOffer:\n', remoteOffer);
   
-  peerConnection.setRemoteDescription(remoteOffer)
-    .then(function () {
-      console.log('setRemoteDescription ok');
-      if (remoteOffer.type === "offer") {
-        peerConnection.createAnswer()
-          .then(function (description) {
-            console.log('createAnswer:\n', description);
-            
-            peerConnection.setLocalDescription(description)
-              .then(function () {
-              })
-              .catch(handleCreateDescriptionError);
-            
-          }).catch(handleCreateDescriptionError);
-      }
-    }).catch(handleCreateDescriptionError);
+  try {
+    await pc.setRemoteDescription(remoteOffer);
+    console.log('setRemoteDescription ok');
+    
+    if (remoteOffer.type === "offer") {
+      const description = await pc.createAnswer();
+      await pc.setLocalDescription(description);
+      
+      console.log('createAnswer:\n', description);
+    }
+  } catch (e) {console.log(e);}
 }
 
-peerConnection.ondatachannel = function (event) {
+/* ======================================================
+ Peers listeners
+ ======================================================= */
+pc.ondatachannel = function (event) {
   if (event.channel.label === "fileChannel") {
     console.log('fileChannel received: ', event);
     fileChannel = event.channel;
@@ -183,24 +165,24 @@ peerConnection.ondatachannel = function (event) {
   }
 };
 
-peerConnection.onicecandidate = function (event) {
-  const cand = event.candidate;
+pc.onicecandidate = function (event) {
+  const candidate = event.candidate;
   
-  if (!cand) {
-    console.log("peerConnection.iceGatheringState = " + peerConnection.iceGatheringState);
-    //console.log(peerConnection.localDescription);
-    offerInput.value = JSON.stringify(peerConnection.localDescription);
+  if (!candidate) {
+    console.log("pc.iceGatheringState = " + pc.iceGatheringState);
+    //console.log(pc.localDescription);
+    offerInput.value = JSON.stringify(pc.localDescription);
   } else {
-    console.log(cand.candidate);
+    console.log(candidate.candidate);
   }
 };
 
-peerConnection.oniceconnectionstatechange = function () {
-  if (peerConnection) {
+pc.oniceconnectionstatechange = function () {
+  if (pc) {
     console.log('oniceconnectionstatechange:');
-    console.log(peerConnection.iceConnectionState);
+    console.log(pc.iceConnectionState);
     
-    if (peerConnection.iceConnectionState === "disconnected") {
+    if (pc.iceConnectionState === "disconnected") {
       sendButton.disabled = true;
       sendFileButton.disabled = true;
       alert("You are disconnected with from partner");
@@ -208,13 +190,14 @@ peerConnection.oniceconnectionstatechange = function () {
   }
 };
 
-peerConnection.onaddstream = function (event) {
-  console.log('remote onaddstream', event.stream);
+pc.ontrack = function (event) {
+  console.log('remote ontrack', event);
   
-  remoteVideo.srcObject = event.stream;
+  if (remoteVideo.srcObject) return;
+  remoteVideo.srcObject = event.streams[0];
 };
 
-peerConnection.onconnectionstatechange = function (event) {
+pc.onconnectionstatechange = function (event) {
   console.log('onconnectionstatechange ', event);
 };
 
@@ -363,10 +346,10 @@ function disconnectPeers() {
   dataChannel.close();
   
   // Close the RTCPeerConnection
-  peerConnection.close();
+  pc.close();
   
   dataChannel = null;
-  peerConnection = null;
+  pc = null;
   
   // Update user interface elements
   disconnectButton.disabled = true;
@@ -379,22 +362,15 @@ function disconnectPeers() {
 /* ==============================
  Get local Stream
  ================================ */
-function getLocalStream(stream) {
-  localVideoStream = stream;
-  
-  // peerConnection.addStream(stream);
-  
-  for (const track of stream.getTracks()) {
-    console.log(track);
-    peerConnection.addTrack(track, stream);
-  }
-  
-  localVideo.srcObject = stream;
-}
-
-navigator.mediaDevices.getUserMedia(constrains)
-  .then(getLocalStream)
-  .catch(errorHandler);
+(async () => {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia(constrains);
+    
+    stream.getTracks().forEach(track => pc.addTrack(track, stream));
+    
+    localVideo.srcObject = stream;
+  } catch (error) {console.log(error);}
+})();
 
 /* ==============================
  Set up an event listener which will run the startup
